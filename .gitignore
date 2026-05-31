@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Local env / secrets
+.env
+.env.*
+
+# Agent guidance — kept local, not published
+CLAUDE.md
+
+# Data artifacts (Maia checkpoints download on first use, etc.)
+data/*
+!data/.gitkeep

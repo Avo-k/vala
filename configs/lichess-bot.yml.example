@@ -1,0 +1,54 @@
+# Example config.yml for lichess-bot wrapping vala.
+# Copy into your lichess-bot/ directory and edit the token + paths.
+#
+#   git clone https://github.com/lichess-bot-devs/lichess-bot.git
+#   cd lichess-bot && pip install -r requirements.txt
+#   cp ../vala/configs/lichess-bot.yml.example config.yml   # then edit token
+#   python lichess-bot.py
+#
+# The account must be a BOT account (POST /api/bot/account/upgrade, irreversible,
+# zero rated games first). vala's policy deliberately sets traps — fine for a
+# registered BOT, an instant ban on a human login.
+
+token: "REPLACE_WITH_YOUR_BOT_TOKEN"     # OAuth token of the BOT account
+url: "https://lichess.org/"
+
+engine:
+  dir: "/home/avok/code/vala"            # working dir; vala loads .env from here
+  # Absolute path is safest; `uv sync` creates this entry point.
+  # Verify with: ls .venv/bin/vala-uci
+  name: ".venv/bin/vala-uci"
+  protocol: "uci"
+  ponder: false
+  silence_stderr: false                  # keep the [vala] info logs visible
+
+  uci_options:
+    Profile: balanced                    # solid | balanced | aggressive (the "spice" dial)
+    TimeMs: 0                            # 0 = derive from the clock; else fixed ms/move
+    Elo: 0                              # 0 = model the opponent at their own rating; 600..2600 pins it
+    MaiaType: maia3-5m                   # maia3-5m | maia3-23m | maia3-79m (CPU: 5m is the fast default)
+    Pool: 4                             # Patricia subprocesses; set to the VM's vCPU count
+    UseExplorer: false                   # true = real Lichess frequencies in the opening (needs LICHESS_TOKEN, slower)
+
+challenge:
+  concurrency: 1                         # one game at a time: the pool wants all the cores
+  accept_bot: true
+  only_bot: false
+  max_increment: 30
+  min_increment: 0
+  max_base: 600                          # seconds; 10-min games cap for now
+  min_base: 60
+  variants:
+    - standard
+  time_controls:
+    - blitz
+    - rapid
+  modes:
+    - casual
+    - rated
+
+greeting:
+  hello: "Hi! I mostly play sound moves — but watch out, I set the occasional trap. gl hf!"
+  goodbye: "gg!"
+  hello_spectators: "vala: solid moves, with the occasional Maia-baited swindle."
+  goodbye_spectators: "gg"

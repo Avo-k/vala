@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vala"]
+
+[tool.hatch.metadata]
+# Required because `maia3` is pinned to a git URL (not on PyPI).
+allow-direct-references = true
+
+[project]
+name = "vala"
+version = "0.1.0"
+description = "EV-maximizing chess engine that baits a Maia-modeled human into mistakes"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Maia-3 (Chessformer, CSSLab). Not on PyPI; install from git.
+    "maia3 @ git+https://github.com/CSSLab/maia3.git",
+    "huggingface-hub>=0.23",
+    "python-chess>=1.10",
+    # CUDA build (4090). Pinned to Maia-3's tested baseline version.
+    "torch==2.4.0",
+    "python-dotenv>=1.2.2",
+    "requests>=2",
+    "pyyaml>=6",
+]
+
+[project.scripts]
+vala-uci = "vala.uci:main"
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu121" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+    "slow: integration tests that load Patricia + Maia (deselect with -m 'not slow')",
+]
