@@ -257,7 +257,8 @@ def main() -> None:
 
 def _emit_move(board: chess.Board, res: _Resources, opts: Options, budget: int) -> None:
     base = PROFILES[opts.profile]
-    pl = timectl.plan(budget, base["human_depth"], base["top_replies"])
+    pl = timectl.plan(budget, base["human_depth"], base["top_replies"],
+                      pool_size=res.pool.n)
     opp_model = res.explorer if opts.use_explorer else None
 
     ply = len(board.move_stack)
