@@ -92,6 +92,49 @@ def test_allie_none_leaves_annotation_empty():
     assert mi.allie_think_time is None and mi.allie_reply_top is None
 
 
+# ---- screen-bait (allow_deep=False, the blitz/small-pool fast path) -----------
+
+def test_decide_screen_bait_stays_solid_without_trap():
+    from vala.bot import decide_screen_bait
+    best = Candidate(move=chess.Move.from_uci("e2e4"), cp=30)
+    alt = Candidate(move=chess.Move.from_uci("d2d4"), cp=10)
+    chosen, dev = decide_screen_bait([best, alt], [1.0, 2.0], best.move, margin_cp=15)
+    assert not dev and chosen is best
+
+
+def test_decide_screen_bait_deviates_on_strong_trap():
+    from vala.bot import decide_screen_bait
+    best = Candidate(move=chess.Move.from_uci("e2e4"), cp=30)
+    alt = Candidate(move=chess.Move.from_uci("d2d4"), cp=10)
+    # alt is 20cp worse but the screen sees +60 expected uplift → proxy 70 vs 31.
+    chosen, dev = decide_screen_bait([best, alt], [1.0, 60.0], best.move, margin_cp=15)
+    assert dev and chosen is alt
+
+
+class _ScreenPool:
+    """Mock pool: two candidates; leaf evals make the d2d4 line a strong trap."""
+    def multipv(self, board, k=6, time_ms=200):
+        return [Candidate(move=chess.Move.from_uci("e2e4"), cp=30),
+                Candidate(move=chess.Move.from_uci("d2d4"), cp=10)]
+
+    def map_eval(self, boards, ms):
+        return [400 if "d2d4" in [m.uci() for m in b.move_stack] else 100 for b in boards]
+
+
+class _OneReplyMaia:
+    def predict_batch(self, boards, elos_self, elos_oppo):
+        return [({next(iter(b.legal_moves)).uci(): 1.0}, 0.5) for b in boards]
+
+
+def test_screen_bait_path_springs_trap_without_deep_search():
+    from vala.bot import vala_move
+    move, mi = vala_move(chess.Board(), _ScreenPool(), _OneReplyMaia(),
+                         profile="balanced", allow_deep=False)
+    assert mi.mode == "screen"           # used the depth-1 screen, not ev_select
+    assert mi.deviated and mi.triggered
+    assert move == chess.Move.from_uci("d2d4")
+
+
 # ---- slow integration (real Patricia + Maia) -------------------------------
 
 @pytest.fixture(scope="module")

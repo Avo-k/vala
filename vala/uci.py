@@ -262,20 +262,22 @@ def _emit_move(board: chess.Board, res: _Resources, opts: Options, budget: int) 
     opp_model = res.explorer if opts.use_explorer else None
 
     ply = len(board.move_stack)
-    if not pl.run_deep:
-        # Too little time: just the engine's best move.
+    if not pl.run_screen:
+        # Too little time even for the depth-1 screen: just the engine's best move.
         move = res.pool.multipv(board, k=1, time_ms=pl.cand_ms)[0].move
         _emit(f"info string budget={budget} fast-best")
         _movelog(dict(t=round(time.time(), 3), game=res.game_idx, ply=ply,
                       profile=opts.profile, budget=budget, human_elo=opts.human_elo,
                       move=move.uci(), tag="fast-best", deviated=False, triggered=False,
-                      fen=board.fen()))
+                      mode="fast", fen=board.fen()))
         _emit(f"bestmove {move.uci()}")
         return
 
+    # run_deep ⇒ full expectimax; run_screen-only ⇒ cheap depth-1 screen-bait.
     move, info = vala_move(
         board, res.pool, res.maia,
         profile=opts.profile, human_elo=opts.human_elo, opp_model=opp_model,
+        allow_deep=pl.run_deep,
         cand_ms=pl.cand_ms, leaf_ms=pl.leaf_ms, vala_ms=pl.vala_ms,
         human_depth=pl.human_depth, top_replies=pl.top_replies,
     )
@@ -292,7 +294,8 @@ def _emit_move(board: chess.Board, res: _Resources, opts: Options, budget: int) 
     _movelog(dict(
         t=round(time.time(), 3), game=res.game_idx, ply=ply,
         profile=opts.profile, budget=budget, human_elo=opts.human_elo,
-        move=move.uci(), tag=tag, deviated=info.deviated, triggered=info.triggered,
+        move=move.uci(), tag=tag, mode=info.mode,
+        deviated=info.deviated, triggered=info.triggered,
         best_cp=info.best_cp, chosen_cp=info.chosen_cp, eval_loss=info.eval_loss,
         trap_potential=round(info.trap_potential, 1),
         ev_best=round(info.ev_best, 1), ev_chosen=round(info.ev_chosen, 1),

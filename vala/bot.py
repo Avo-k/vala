@@ -60,6 +60,7 @@ class MoveInfo:
     n_engine_calls: int
     n_maia_calls: int
     bypass: str | None = None
+    mode: str | None = None   # which selector ran: "deep" | "screen" | None (fast/no machinery)
     # Allie v1 diagnostics (step 1: measured, never used in the decision). Computed
     # on the position the *human* will move in (after vala's chosen move). See
     # vala/allie.py and memory `roadmap-opponent-model`.
@@ -79,13 +80,17 @@ def screen_trap_potential(
     opp_model,
     top_replies: int,
     leaf_ms: int,
-) -> tuple[float, str, int, int]:
+) -> tuple[list[float], list[Candidate], str, int, int]:
     """Depth-1 trap detector. For each feasible candidate, the expected upside
     from opponent imperfection: Σ_r P(r)·max(0, our_cp(r) − sound_cp). Summing
     every positive deviation (not just one-move blunders) makes this a proxy for
     "deeper search will find a swindle" — it fires both on immediate blunders and
     on the accumulation of small human errors that compound at depth ≥ 2.
-    Returns (max_expected_uplift_cp, oracle, n_engine, n_maia).
+
+    Returns (uplifts, scored, oracle, n_engine, n_maia), where uplifts[i] is the
+    expected uplift (cp) of scored[i] (the feasible candidates that don't end the
+    game). The max is the trigger signal; the full list lets a blitz fast path bait
+    on the screen alone (see `decide_screen_bait`) when there's no time to go deep.
     """
     root_white = board.turn
     boards, cs = [], []
@@ -96,7 +101,7 @@ def screen_trap_potential(
             boards.append(b)
             cs.append(c)
     if not boards:
-        return 0.0, "M", 0, 0
+        return [], [], "M", 0, 0
 
     dists, n_maia = reply_dists(boards, maia, human_elo, opp_model=opp_model, allow_explorer=True)
     used_explorer = opp_model is not None and n_maia < len(boards)
@@ -115,7 +120,27 @@ def screen_trap_potential(
         uplift[ci] += p * max(0.0, our_cp - cs[ci].cp)
 
     oracle = "E" if used_explorer else "M"
-    return (max(uplift) if uplift else 0.0), oracle, len(spec), n_maia
+    return uplift, cs, oracle, len(spec), n_maia
+
+
+def decide_screen_bait(
+    scored: list[Candidate], uplifts: list[float], best_move: chess.Move, margin_cp: int,
+) -> tuple[Candidate, bool]:
+    """Depth-1 bait decision from the screen alone (the blitz/small-pool fast path).
+
+    Proxy EV of a candidate = its sound cp + the screen's expected uplift from
+    opponent error. Deviate to the highest-proxy-EV move only if it beats engine-
+    best's proxy EV by `margin_cp` (mirrors `search.decide`, but with the cheap
+    depth-1 uplift instead of the deep expectimax). Pure → unit-testable. `scored`
+    is already risk_cp-filtered by the caller.
+    """
+    proxies = [c.cp + u for c, u in zip(scored, uplifts)]
+    bi = next((i for i, c in enumerate(scored) if c.move == best_move),
+              max(range(len(scored)), key=lambda i: scored[i].cp))
+    ti = max(range(len(scored)), key=lambda i: proxies[i])
+    if scored[ti].move != best_move and proxies[ti] >= proxies[bi] + margin_cp:
+        return scored[ti], True
+    return scored[bi], False
 
 
 def vala_move(
@@ -128,6 +153,7 @@ def vala_move(
     opp_model=None,
     allie=None,
     time_control: str | None = None,
+    allow_deep: bool = True,
     k: int = 6,
     cand_ms: int = 200,
     leaf_ms: int = 50,
@@ -138,6 +164,9 @@ def vala_move(
     """Return vala's move plus diagnostics.
 
     `human_depth` / `top_replies` override the profile (used by time management).
+    `allow_deep=False` (small pool / blitz: no time for the expectimax) keeps the
+    cheap trigger screen but baits from it directly via `decide_screen_bait` instead
+    of escalating to `ev_select` — so vala can still spring traps on a 2-worker pool.
     `allie`, when given (an `AlliePredictor`), only *annotates* the returned
     MoveInfo with Allie's think-time/value/top-reply for the resulting human-to-move
     position — it never affects which move vala plays (roadmap step 1: measure first).
@@ -156,13 +185,14 @@ def vala_move(
     best = cands[0]
 
     def info(chosen_eval: MoveEval, best_eval: MoveEval, *, deviated: bool,
-             triggered: bool, potential: float, oracle: str, bypass: str | None) -> MoveInfo:
+             triggered: bool, potential: float, oracle: str, bypass: str | None,
+             mode: str | None = None) -> MoveInfo:
         return MoveInfo(
             profile=profile, best_cp=best.cp, chosen_cp=chosen_eval.cand.cp,
             eval_loss=best.cp - chosen_eval.cand.cp,
             ev_best=best_eval.ev, ev_chosen=chosen_eval.ev,
             deviated=deviated, triggered=triggered, trap_potential=potential, oracle=oracle,
-            n_engine_calls=n_engine, n_maia_calls=n_maia, bypass=bypass,
+            n_engine_calls=n_engine, n_maia_calls=n_maia, bypass=bypass, mode=mode,
         )
 
     def finish(move: chess.Move, minfo: MoveInfo) -> tuple[chess.Move, MoveInfo]:
@@ -195,17 +225,28 @@ def vala_move(
                                       potential=0.0, oracle="-", bypass="no-alt"))
 
     # Cheap trigger screen.
-    potential, oracle, se, sm = screen_trap_potential(
+    uplifts, scored, oracle, se, sm = screen_trap_potential(
         board, feasible, pool, maia, human_elo=human_elo, opp_model=opp_model,
         top_replies=kn["top_replies"], leaf_ms=leaf_ms,
     )
     n_engine += se
     n_maia += sm
+    potential = max(uplifts) if uplifts else 0.0
     if potential < kn["trigger_cp"]:
         return finish(best.move, info(best_me, best_me, deviated=False, triggered=False,
                                       potential=potential, oracle=oracle, bypass=None))
 
-    # Trap plausible → pay for the deep expectimax.
+    # Trap plausible. With time, confirm with the deep expectimax; otherwise (small
+    # pool / blitz) bait from the depth-1 screen directly so vala still springs traps.
+    if not allow_deep:
+        chosen_c, deviated = decide_screen_bait(scored, uplifts, best.move, kn["margin_cp"])
+        upl = {c.move: u for c, u in zip(scored, uplifts)}
+        best_me = MoveEval(cand=best, ev=float(best.cp) + upl.get(best.move, 0.0), sound_cp=best.cp)
+        chosen_me = MoveEval(cand=chosen_c, ev=float(chosen_c.cp) + upl.get(chosen_c.move, 0.0),
+                             sound_cp=chosen_c.cp)
+        return finish(chosen_c.move, info(chosen_me, best_me, deviated=deviated, triggered=True,
+                                          potential=potential, oracle=oracle, bypass=None, mode="screen"))
+
     res: SelectResult = ev_select(
         board, pool, maia, cands=cands, human_elo=human_elo,
         human_depth=kn["human_depth"], top_replies=kn["top_replies"],
@@ -215,4 +256,5 @@ def vala_move(
     n_engine += res.n_engine_calls
     n_maia += res.n_maia_calls
     return finish(res.chosen, info(res.chosen_eval, res.best_eval, deviated=res.deviated,
-                                   triggered=True, potential=potential, oracle=oracle, bypass=res.bypass))
+                                   triggered=True, potential=potential, oracle=oracle,
+                                   bypass=res.bypass, mode="deep"))

@@ -13,9 +13,18 @@ AGG_DEPTH, AGG_TR = 3, 5
 
 
 def test_small_pool_blitz_does_not_run_deep():
-    # 5+3, early move → ~6s budget, Pool=2. Must NOT launch the deep search.
+    # 5+3, early move → ~6s budget, Pool=2. Must NOT launch the deep search, but
+    # the cheap depth-1 screen-bait should still fit (so vala can trap in blitz).
     pl = plan(6000, AGG_DEPTH, AGG_TR, pool_size=2)
-    assert not pl.run_deep, "Pool=2 blitz cannot afford the deep search — must play fast-best"
+    assert not pl.run_deep, "Pool=2 blitz cannot afford the deep search"
+    assert pl.run_screen, "Pool=2 blitz should still afford the depth-1 screen-bait"
+    assert pl.human_depth == 1
+
+
+def test_too_little_time_plays_fast_best():
+    # Tiny budget on a small pool: not even the screen fits → engine-best.
+    pl = plan(700, AGG_DEPTH, AGG_TR, pool_size=2)
+    assert not pl.run_deep and not pl.run_screen
 
 
 def test_small_pool_never_picks_depth3():
