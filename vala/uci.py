@@ -8,7 +8,10 @@ search depth and movetimes from the clock.
 from __future__ import annotations
 
 import contextlib
+import json
+import os
 import sys
+import time
 from dataclasses import dataclass
 
 import chess
@@ -49,6 +52,23 @@ def _emit(line: str) -> None:
 def _log(msg: str) -> None:
     sys.stderr.write(f"[vala] {msg}\n")
     sys.stderr.flush()
+
+
+def _movelog(record: dict) -> None:
+    """Persist one per-move record as JSONL. Always to stderr with a `MOVELOG`
+    prefix (captured by `docker logs` since silence_stderr=false), and also to the
+    file named by env `VALA_MOVELOG` when set. This is how we measure the deployed
+    bot's real behavior on humans (bait rate, eval sacrificed, trap_potential)."""
+    line = json.dumps(record, separators=(",", ":"))
+    sys.stderr.write(f"MOVELOG {line}\n")
+    sys.stderr.flush()
+    path = os.environ.get("VALA_MOVELOG")
+    if path:
+        try:
+            with open(path, "a") as fh:
+                fh.write(line + "\n")
+        except Exception as exc:
+            _log(f"movelog file write failed: {exc}")
 
 
 def _parse_position(args: list[str]) -> chess.Board:
@@ -158,6 +178,7 @@ class _Resources:
         self.pool: PatriciaPool | None = None
         self.maia = None
         self.explorer = None
+        self.game_idx = 0  # bumped on ucinewgame so move logs group into games
 
     def ensure(self, opts: Options) -> None:
         if self.pool is None or self.pool.n != opts.pool_size:
@@ -211,6 +232,7 @@ def main() -> None:
                 _set_option(opts, words)
             elif cmd == "ucinewgame":
                 board = chess.Board()
+                res.game_idx += 1
             elif cmd == "position":
                 try:
                     board = _parse_position(words[1:])
@@ -238,10 +260,15 @@ def _emit_move(board: chess.Board, res: _Resources, opts: Options, budget: int) 
     pl = timectl.plan(budget, base["human_depth"], base["top_replies"])
     opp_model = res.explorer if opts.use_explorer else None
 
+    ply = len(board.move_stack)
     if not pl.run_deep:
         # Too little time: just the engine's best move.
         move = res.pool.multipv(board, k=1, time_ms=pl.cand_ms)[0].move
         _emit(f"info string budget={budget} fast-best")
+        _movelog(dict(t=round(time.time(), 3), game=res.game_idx, ply=ply,
+                      profile=opts.profile, budget=budget, human_elo=opts.human_elo,
+                      move=move.uci(), tag="fast-best", deviated=False, triggered=False,
+                      fen=board.fen()))
         _emit(f"bestmove {move.uci()}")
         return
 
@@ -261,6 +288,15 @@ def _emit_move(board: chess.Board, res: _Resources, opts: Options, budget: int) 
         f"elo={opts.human_elo} oracle={info.oracle} "
         f"calls={info.n_engine_calls}e/{info.n_maia_calls}m"
     )
+    _movelog(dict(
+        t=round(time.time(), 3), game=res.game_idx, ply=ply,
+        profile=opts.profile, budget=budget, human_elo=opts.human_elo,
+        move=move.uci(), tag=tag, deviated=info.deviated, triggered=info.triggered,
+        best_cp=info.best_cp, chosen_cp=info.chosen_cp, eval_loss=info.eval_loss,
+        trap_potential=round(info.trap_potential, 1),
+        ev_best=round(info.ev_best, 1), ev_chosen=round(info.ev_chosen, 1),
+        oracle=info.oracle, bypass=info.bypass, fen=board.fen(),
+    ))
     _emit(f"bestmove {move.uci()}")
 
 

@@ -18,7 +18,7 @@ engine:
   silence_stderr: false                  # keep the [vala] info logs visible
 
   uci_options:
-    Profile: balanced                    # solid | balanced | aggressive (the "spice" dial)
+    Profile: aggressive                  # solid | balanced | aggressive (the "spice" dial)
     TimeMs: 0                            # 0 = derive from clock; else fixed ms/move
     Elo: 0                              # 0 = model the opponent at their own rating (600..2600 pins it)
     MaiaType: maia3-5m                   # maia3-5m | maia3-23m | maia3-79m (CPU: 5m is the fast default)
