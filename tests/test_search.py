@@ -52,6 +52,46 @@ def test_mate_bypass_skips_model():
     assert res.n_engine_calls == 0  # used the passed candidate; never searched
 
 
+# ---- Allie diagnostics annotation (roadmap step 1): fast, no model needed -----
+
+class _NoAltPool:
+    """Two candidates with only the best feasible → vala_move takes the 'no-alt'
+    fast path (no screen/Maia), so we can test the Allie annotation in isolation."""
+    def multipv(self, board, k=6, time_ms=200):
+        a, b = list(board.legal_moves)[:2]
+        return [Candidate(move=a, cp=30), Candidate(move=b, cp=-300)]
+
+
+class _FakeAllie:
+    """Stands in for AlliePredictor — no torch/checkpoint."""
+    def __init__(self):
+        self.calls = 0
+
+    def predict(self, board, elo=1500, time_control="300+0"):
+        self.calls += 1
+        from vala.allie import AllieOut
+        return AllieOut(move_probs={"e7e5": 0.7, "c7c5": 0.3}, value=0.12, think_time=4.2)
+
+
+def test_allie_annotates_without_changing_move():
+    from vala.bot import vala_move
+    board = chess.Board()
+    expected = _NoAltPool().multipv(board)[0].move
+    allie = _FakeAllie()
+    move, mi = vala_move(board, _NoAltPool(), maia=None, allie=allie, human_elo=1500)
+    assert move == expected                    # diagnostics never change the move
+    assert allie.calls == 1
+    assert mi.allie_think_time == 4.2
+    assert mi.allie_value == 0.12
+    assert mi.allie_reply_top == "e7e5" and mi.allie_reply_p == 0.7
+
+
+def test_allie_none_leaves_annotation_empty():
+    from vala.bot import vala_move
+    move, mi = vala_move(chess.Board(), _NoAltPool(), maia=None, allie=None)
+    assert mi.allie_think_time is None and mi.allie_reply_top is None
+
+
 # ---- slow integration (real Patricia + Maia) -------------------------------
 
 @pytest.fixture(scope="module")

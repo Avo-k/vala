@@ -18,6 +18,9 @@ dependencies = [
     # Maia-3 (Chessformer, CSSLab). Not on PyPI; install from git.
     "maia3 @ git+https://github.com/CSSLab/maia3.git",
     "huggingface-hub>=0.23",
+    # Allie v1 (vendored under vala/_allie) — gpt2 inference for the second human
+    # model. BetterTransformer/optimum dropped (verified no-op), so just transformers.
+    "transformers>=4.39,<5",
     "python-chess>=1.10",
     # CUDA build (4090). Pinned to Maia-3's tested baseline version.
     "torch==2.4.0",

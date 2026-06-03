@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 import chess
 
+from vala.allie import DEFAULT_TIME_CONTROL
 from vala.engine import Candidate
 from vala.pool import PatriciaPool
 from vala.search import (
@@ -59,6 +60,13 @@ class MoveInfo:
     n_engine_calls: int
     n_maia_calls: int
     bypass: str | None = None
+    # Allie v1 diagnostics (step 1: measured, never used in the decision). Computed
+    # on the position the *human* will move in (after vala's chosen move). See
+    # vala/allie.py and memory `roadmap-opponent-model`.
+    allie_think_time: float | None = None   # predicted human seconds on the reply
+    allie_value: float | None = None        # Allie value there, White-POV [-1, 1]
+    allie_reply_top: str | None = None      # Allie's most likely human reply (uci)
+    allie_reply_p: float | None = None       # ...and its probability
 
 
 def screen_trap_potential(
@@ -118,6 +126,8 @@ def vala_move(
     profile: str = "balanced",
     human_elo: int = 1500,
     opp_model=None,
+    allie=None,
+    time_control: str | None = None,
     k: int = 6,
     cand_ms: int = 200,
     leaf_ms: int = 50,
@@ -128,6 +138,9 @@ def vala_move(
     """Return vala's move plus diagnostics.
 
     `human_depth` / `top_replies` override the profile (used by time management).
+    `allie`, when given (an `AlliePredictor`), only *annotates* the returned
+    MoveInfo with Allie's think-time/value/top-reply for the resulting human-to-move
+    position — it never affects which move vala plays (roadmap step 1: measure first).
     """
     if profile not in PROFILES:
         raise ValueError(f"unknown profile {profile!r}; known: {list(PROFILES)}")
@@ -152,15 +165,34 @@ def vala_move(
             n_engine_calls=n_engine, n_maia_calls=n_maia, bypass=bypass,
         )
 
+    def finish(move: chess.Move, minfo: MoveInfo) -> tuple[chess.Move, MoveInfo]:
+        """Attach Allie diagnostics for the resulting human-to-move position.
+        Pure annotation — does not change `move`."""
+        if allie is not None:
+            after = board.copy()
+            after.push(move)
+            if not after.is_game_over():
+                o = allie.predict(
+                    after, elo=human_elo,
+                    time_control=time_control or DEFAULT_TIME_CONTROL,
+                )
+                minfo.allie_think_time = o.think_time
+                minfo.allie_value = o.value
+                if o.move_probs:
+                    top_uci, top_p = max(o.move_probs.items(), key=lambda kv: kv[1])
+                    minfo.allie_reply_top = top_uci
+                    minfo.allie_reply_p = top_p
+        return move, minfo
+
     # Mate / no real alternative → just play the engine's best, no trap machinery.
     best_me = MoveEval(cand=best, ev=float(best.cp), sound_cp=best.cp)
     if abs(best.cp) >= MATE_CUTOFF:
-        return best.move, info(best_me, best_me, deviated=False, triggered=False,
-                               potential=0.0, oracle="-", bypass="mate")
+        return finish(best.move, info(best_me, best_me, deviated=False, triggered=False,
+                                      potential=0.0, oracle="-", bypass="mate"))
     feasible = [c for c in cands if best.cp - c.cp <= kn["risk_cp"]]
     if len(feasible) == 1:
-        return best.move, info(best_me, best_me, deviated=False, triggered=False,
-                               potential=0.0, oracle="-", bypass="no-alt")
+        return finish(best.move, info(best_me, best_me, deviated=False, triggered=False,
+                                      potential=0.0, oracle="-", bypass="no-alt"))
 
     # Cheap trigger screen.
     potential, oracle, se, sm = screen_trap_potential(
@@ -170,8 +202,8 @@ def vala_move(
     n_engine += se
     n_maia += sm
     if potential < kn["trigger_cp"]:
-        return best.move, info(best_me, best_me, deviated=False, triggered=False,
-                               potential=potential, oracle=oracle, bypass=None)
+        return finish(best.move, info(best_me, best_me, deviated=False, triggered=False,
+                                      potential=potential, oracle=oracle, bypass=None))
 
     # Trap plausible → pay for the deep expectimax.
     res: SelectResult = ev_select(
@@ -182,5 +214,5 @@ def vala_move(
     )
     n_engine += res.n_engine_calls
     n_maia += res.n_maia_calls
-    return res.chosen, info(res.chosen_eval, res.best_eval, deviated=res.deviated,
-                            triggered=True, potential=potential, oracle=oracle, bypass=res.bypass)
+    return finish(res.chosen, info(res.chosen_eval, res.best_eval, deviated=res.deviated,
+                                   triggered=True, potential=potential, oracle=oracle, bypass=res.bypass))

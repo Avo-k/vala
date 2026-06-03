@@ -14,3 +14,7 @@ CLAUDE.md
 # Data artifacts (Maia checkpoints download on first use, etc.)
 data/*
 !data/.gitkeep
+
+# Model checkpoints (Allie weights: ~1 GB small, ~3.7 GB medium — downloaded, not committed)
+models/
+*.pt
