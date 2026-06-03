@@ -1,0 +1,49 @@
+# lichess-bot config baked into the Docker image (COPY'd to
+# /opt/lichess-bot/config.yml in the Dockerfile). This is the single source of
+# truth for the deployed bot — edit it here, push, and the autodeploy rebuild
+# picks it up. Nothing to touch on the VM.
+#
+# The only thing that stays on the VM is the secret token, supplied via the
+# LICHESS_TOKEN env var (.env). lichess-bot reads it through the
+# LICHESS_BOT_TOKEN env override; the placeholder below is never used at runtime.
+
+token: "set-via-LICHESS_BOT_TOKEN-env"   # overridden by env; do NOT put a real token here
+url: "https://lichess.org/"
+
+engine:
+  dir: "/opt/vala"
+  name: ".venv/bin/vala-uci"
+  protocol: "uci"
+  ponder: false
+  silence_stderr: false                  # keep the [vala] info logs visible
+
+  uci_options:
+    Profile: balanced                    # solid | balanced | aggressive (the "spice" dial)
+    TimeMs: 0                            # 0 = derive from clock; else fixed ms/move
+    Elo: 0                              # 0 = model the opponent at their own rating (600..2600 pins it)
+    MaiaType: maia3-5m                   # maia3-5m | maia3-23m | maia3-79m (CPU: 5m is the fast default)
+    Pool: 2                             # Patricia subprocesses; capped to share the 4-vCPU VM with rorschach
+    UseExplorer: false                   # true = real Lichess frequencies in the opening (needs LICHESS_TOKEN, slower)
+
+challenge:
+  concurrency: 1                         # one game at a time: the pool wants the cores
+  accept_bot: true
+  only_bot: false
+  max_increment: 30
+  min_increment: 0
+  max_base: 600
+  min_base: 60
+  variants:
+    - standard
+  time_controls:
+    - blitz
+    - rapid
+  modes:
+    - casual
+    - rated
+
+greeting:
+  hello: "Hi! I mostly play sound moves — but watch out, I set the occasional trap. gl hf!"
+  goodbye: "gg!"
+  hello_spectators: "vala: solid moves, with the occasional Maia-baited swindle."
+  goodbye_spectators: "gg"

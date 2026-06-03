@@ -1,0 +1,26 @@
+.git/
+.venv/
+.pytest_cache/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Secrets — never bake into the image.
+.env
+.env.local
+
+# Large data dirs — Maia checkpoints mount as the hf-cache volume instead.
+data/
+
+# Local-only.
+.vscode/
+.idea/
+*.swp
+tests/
+
+# bin/ is NOT ignored — the Dockerfile COPYs bin/patricia (the engine binary)
+# into the image. configs/ is NOT ignored — config.docker.yml is baked in.
+
+# This file & docs we don't need at build time.
+README.md
+docs/

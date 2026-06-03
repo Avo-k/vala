@@ -1,0 +1,68 @@
+# Self-host on a VM, next to rorschach.
+#
+#   1. echo "LICHESS_TOKEN=lip_xxx" > .env    # required: vala's BOT account token
+#   2. docker compose run --rm warmup         # one-shot HF cache prefill (maia3-5m)
+#   3. docker compose up -d --build
+#
+# There is no config.yml to manage on the VM: it is baked into the image from
+# configs/config.docker.yml. Edit that file, push, redeploy.
+#
+# Maia-3 weights live in the SHARED hf-cache volume (rorschach_hf-cache): both
+# bots read the same on-disk checkpoints, so weights are downloaded once. Each
+# process still loads its own copy into RAM.
+
+services:
+  vala:
+    build:
+      context: .
+      args:
+        LICHESS_BOT_REF: master
+    image: vala:latest
+    container_name: vala
+    restart: unless-stopped
+    environment:
+      # vala's BOT-account token, supplied via .env. lichess-bot reads
+      # LICHESS_BOT_TOKEN natively and overrides the placeholder in the baked
+      # config.yml. LICHESS_TOKEN is the opening-explorer token read by vala
+      # (only used when UseExplorer=true; passed through for parity).
+      LICHESS_BOT_TOKEN: "${LICHESS_TOKEN:?set LICHESS_TOKEN in .env or shell}"
+      LICHESS_TOKEN: "${LICHESS_TOKEN:-}"
+      # CPU bornage: one OpenMP/torch thread per process — Patricia parallelism
+      # is the Pool of subprocesses (config.docker.yml: Pool=2), not threads.
+      OMP_NUM_THREADS: "1"
+    volumes:
+      # config.yml is baked into the image (configs/config.docker.yml) — no
+      # mount, so the deployed config is whatever is committed to the repo.
+      - hf-cache:/data/huggingface
+    stop_grace_period: 30s
+    # 2 vCPU / 2 GB: leaves the other 2 vCPU for rorschach (also capped at 2)
+    # on the 4-vCPU VM, so the two bots don't starve each other.
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+
+  # One-shot: prefill the HF cache with the Maia-3 5M checkpoint so the first
+  # real game doesn't block on a download during isready.
+  #   docker compose run --rm warmup
+  warmup:
+    image: vala:latest
+    build:
+      context: .
+      args:
+        LICHESS_BOT_REF: master
+    profiles: ["warmup"]
+    volumes:
+      - hf-cache:/data/huggingface
+    entrypoint:
+      - python
+      - -c
+      - "from vala.maia import make_predictor; make_predictor('maia3-5m')"
+
+volumes:
+  # Shared with rorschach: the actual Docker volume is rorschach_hf-cache,
+  # created by rorschach's compose. external=true means we attach, never create.
+  hf-cache:
+    external: true
+    name: rorschach_hf-cache
